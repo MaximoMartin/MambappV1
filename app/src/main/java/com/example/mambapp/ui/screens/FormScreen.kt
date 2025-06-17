@@ -1,6 +1,9 @@
+// FormScreen.kt
 package com.example.mambapp.ui.screens
 
+import android.os.Build
 import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -11,9 +14,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -22,17 +26,22 @@ import com.example.mambapp.Graph
 import com.example.mambapp.R
 import com.example.mambapp.data.entities.Monitoreo
 import com.example.mambapp.data.entities.Paciente
-import com.example.mambapp.ui.components.DateSelector
-import com.example.mambapp.ui.components.EntityDropdown
-import com.example.mambapp.ui.components.SimpleInputDialog
+import com.example.mambapp.ui.components.*
 import com.example.mambapp.viewmodel.*
+import java.time.LocalDate
 
+@RequiresApi(Build.VERSION_CODES.O)
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun FormScreen(
     monitoreo: Monitoreo?,
     onSave: (Monitoreo) -> Unit,
     onCancel: () -> Unit
 ) {
+    val context = LocalContext.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val hoy = LocalDate.now().toString()
+
     val pacienteVM: PacienteViewModel = viewModel(factory = PacienteViewModelFactory(Graph.pacienteRepository))
     val pacientes by pacienteVM.pacientes.collectAsState()
 
@@ -40,32 +49,33 @@ fun FormScreen(
     val tecnicoVM: TecnicoViewModel = viewModel(factory = TecnicoViewModelFactory(Graph.tecnicoRepository))
     val lugarVM: LugarViewModel = viewModel(factory = LugarViewModelFactory(Graph.lugarRepository))
     val patologiaVM: PatologiaViewModel = viewModel(factory = PatologiaViewModelFactory(Graph.patologiaRepository))
+    val monitoreoVM: MonitoreoViewModel = viewModel(factory = MonitoreoViewModelFactory(Graph.monitoreoRepository))
+    val monitoreos by monitoreoVM.monitoreos.collectAsState()
 
     val medicos by medicoVM.medicos.collectAsState()
     val tecnicos by tecnicoVM.tecnicos.collectAsState()
     val lugares by lugarVM.lugares.collectAsState()
     val patologias by patologiaVM.patologias.collectAsState()
 
-    var fechaRealizado by rememberSaveable { mutableStateOf(monitoreo?.fechaRealizado ?: "") }
+    var fechaRealizado by rememberSaveable { mutableStateOf(monitoreo?.fechaRealizado ?: hoy) }
     var fechaPresentado by rememberSaveable { mutableStateOf(monitoreo?.fechaPresentado ?: "") }
     var fechaCobrado by rememberSaveable { mutableStateOf(monitoreo?.fechaCobrado ?: "") }
+
     var dniPaciente by rememberSaveable { mutableStateOf(monitoreo?.dniPaciente?.toString() ?: "") }
+    val paciente = pacientes.find { it.dniPaciente.toString() == dniPaciente }
+
     var selectedMedicoId by rememberSaveable { mutableStateOf(monitoreo?.idMedico ?: -1) }
     var selectedTecnicoId by rememberSaveable { mutableStateOf(monitoreo?.idTecnico ?: -1) }
     var selectedLugarId by rememberSaveable { mutableStateOf(monitoreo?.idLugar ?: -1) }
     var selectedPatologiaId by rememberSaveable { mutableStateOf(monitoreo?.idPatologia ?: -1) }
-    var showDialogTipo by rememberSaveable { mutableStateOf("") }
-    var camposDialog = remember { mutableStateListOf<Pair<String, MutableState<String>>>() }
 
     var anestesia by rememberSaveable { mutableStateOf(monitoreo?.detalleAnestesia ?: "") }
     var complicacion by rememberSaveable { mutableStateOf(monitoreo?.complicacion ?: false) }
     var detalleComplicacion by rememberSaveable { mutableStateOf(monitoreo?.detalleComplicacion ?: "") }
     var cambioMotor by rememberSaveable { mutableStateOf(monitoreo?.cambioMotor ?: "") }
 
-    val context = LocalContext.current
-    val paciente = pacientes.find { it.dniPaciente.toString() == dniPaciente }
-    val monitoreoVM: MonitoreoViewModel = viewModel(factory = MonitoreoViewModelFactory(Graph.monitoreoRepository))
-    val monitoreos by monitoreoVM.monitoreos.collectAsState()
+    var showDialogTipo by rememberSaveable { mutableStateOf("") }
+    var camposDialog = remember { mutableStateListOf<Pair<String, MutableState<String>>>() }
 
     Scaffold(
         topBar = {
@@ -86,18 +96,25 @@ fun FormScreen(
         },
         floatingActionButton = {
             FloatingActionButton(onClick = {
-                if (fechaRealizado.isBlank() || dniPaciente.isBlank()) {
-                    Toast.makeText(context, "Por favor, completá la fecha de realización y el DNI del paciente.", Toast.LENGTH_SHORT).show()
+                val fechaHoy = LocalDate.now()
+                val fechaValida = try {
+                    !LocalDate.parse(fechaRealizado).isAfter(fechaHoy) &&
+                            (fechaPresentado.isBlank() || !LocalDate.parse(fechaPresentado).isAfter(fechaHoy)) &&
+                            (fechaCobrado.isBlank() || !LocalDate.parse(fechaCobrado).isAfter(fechaHoy))
+                } catch (_: Exception) { false }
+
+                if (!fechaValida || dniPaciente.isBlank()) {
+                    Toast.makeText(context, "Fechas inválidas o DNI vacío. No se puede guardar.", Toast.LENGTH_SHORT).show()
                     return@FloatingActionButton
                 }
 
                 val pacienteExiste = pacientes.any { it.dniPaciente.toString() == dniPaciente }
                 if (!pacienteExiste) {
-                    Toast.makeText(context, "Debes agregar un paciente válido antes de guardar el monitoreo.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Debes agregar un paciente válido antes de guardar.", Toast.LENGTH_LONG).show()
                     return@FloatingActionButton
                 }
 
-                val nuevoNroRegistro = if (monitoreos.isEmpty()) 1 else (monitoreos.maxOf { it.nroRegistro } + 1)
+                val nuevoNroRegistro = monitoreos.maxOfOrNull { it.nroRegistro }?.plus(1) ?: 1
 
                 val nuevo = monitoreo?.copy(
                     fechaRealizado = fechaRealizado,
@@ -128,157 +145,103 @@ fun FormScreen(
                     cambioMotor = cambioMotor
                 )
 
-
+                monitoreoVM.addMonitoreo(nuevo)
                 onSave(nuevo)
             }) {
                 Icon(Icons.Default.Check, contentDescription = "Guardar")
             }
         }
-
     ) {
         Column(
             modifier = Modifier
                 .padding(it)
                 .padding(16.dp)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            DateSelector("Fecha Realizado", fechaRealizado) { fechaRealizado = it }
-            DateSelector("Fecha Presentado", fechaPresentado) { fechaPresentado = it }
-            DateSelector("Fecha Cobrado", fechaCobrado) { fechaCobrado = it }
-
-            Text("Paciente: ${paciente?.let { "${it.nombre} ${it.apellido} (${it.dniPaciente})" } ?: "Sin registro"}")
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (paciente == null) {
-                    IconButton(onClick = {
-                        showDialogTipo = "Paciente"
-                        camposDialog.clear()
-                        camposDialog.addAll(
-                            listOf(
-                                "DNI" to mutableStateOf(dniPaciente),
-                                "Nombre" to mutableStateOf(""),
-                                "Apellido" to mutableStateOf(""),
-                                "Edad" to mutableStateOf(""),
-                                "Mutual" to mutableStateOf("")
-                            )
-                        )
-                    }) {
-                        Text("+ Agregar Paciente")
-                    }
-                } else {
-                    IconButton(onClick = {
-                        showDialogTipo = "Paciente"
-                        camposDialog.clear()
-                        camposDialog.addAll(
-                            listOf(
-                                "DNI" to mutableStateOf(paciente.dniPaciente.toString()),
-                                "Nombre" to mutableStateOf(paciente.nombre),
-                                "Apellido" to mutableStateOf(paciente.apellido),
-                                "Edad" to mutableStateOf(paciente.edad.toString()),
-                                "Mutual" to mutableStateOf(paciente.mutual)
-                            )
-                        )
-                    }) {
-                        Text("✏️ Editar Paciente")
-                    }
-                }
+            CardSection("🗓️ Fechas") {
+                DateSelector("Fecha Realizado", fechaRealizado) { fechaRealizado = it }
+                DateSelector("Fecha Presentado", fechaPresentado) { fechaPresentado = it }
+                DateSelector("Fecha Cobrado", fechaCobrado) { fechaCobrado = it }
             }
-            EntityDropdown(
-                label = "Médico",
-                options = medicos.map { "${it.nombre} ${it.apellido}" },
-                selectedIndex = medicos.indexOfFirst { it.id == selectedMedicoId },
-                onSelect = { selectedMedicoId = medicos[it].id },
-                onAddClick = {
+
+            CardSection("👤 Paciente") {
+                NumericInputField("DNI del Paciente", dniPaciente) {
+                    dniPaciente = it
+                    keyboard?.hide()
+                }
+                PacienteControl(
+                    paciente = paciente,
+                    onAgregar = {
+                        showDialogTipo = "Paciente"
+                        camposDialog.setFromNames("DNI", "Nombre", "Apellido", "Edad", "Mutual")
+                        camposDialog[0].second.value = dniPaciente
+                    },
+                    onEditar = {
+                        showDialogTipo = "Paciente"
+                        camposDialog.setFromNames("DNI", "Nombre", "Apellido", "Edad", "Mutual")
+                        camposDialog[0].second.value = paciente?.dniPaciente?.toString() ?: ""
+                        camposDialog[1].second.value = paciente?.nombre ?: ""
+                        camposDialog[2].second.value = paciente?.apellido ?: ""
+                        camposDialog[3].second.value = paciente?.edad?.toString() ?: ""
+                        camposDialog[4].second.value = paciente?.mutual ?: ""
+                    }
+                )
+            }
+
+            CardSection("👨‍⚕️ Profesionales") {
+                EntityDropdown("Médico", medicos.map { "${it.nombre} ${it.apellido}" }, medicos.indexOfFirst { it.id == selectedMedicoId }, { selectedMedicoId = medicos[it].id }) {
                     showDialogTipo = "Médico"
-                    camposDialog.clear()
-                    camposDialog.addAll(
-                        listOf("Nombre" to mutableStateOf(""), "Apellido" to mutableStateOf(""))
-                    )
+                    camposDialog.setFromNames("Nombre", "Apellido")
                 }
-            )
-
-            EntityDropdown(
-                label = "Técnico",
-                options = tecnicos.map { "${it.nombre} ${it.apellido}" },
-                selectedIndex = tecnicos.indexOfFirst { it.id == selectedTecnicoId },
-                onSelect = { selectedTecnicoId = tecnicos[it].id },
-                onAddClick = {
+                EntityDropdown("Técnico", tecnicos.map { "${it.nombre} ${it.apellido}" }, tecnicos.indexOfFirst { it.id == selectedTecnicoId }, { selectedTecnicoId = tecnicos[it].id }) {
                     showDialogTipo = "Técnico"
-                    camposDialog.clear()
-                    camposDialog.addAll(
-                        listOf("Nombre" to mutableStateOf(""), "Apellido" to mutableStateOf(""))
-                    )
+                    camposDialog.setFromNames("Nombre", "Apellido")
                 }
-            )
+            }
 
-            EntityDropdown(
-                label = "Lugar",
-                options = lugares.map { "${it.nombre}, ${it.provincia}" },
-                selectedIndex = lugares.indexOfFirst { it.id == selectedLugarId },
-                onSelect = { selectedLugarId = lugares[it].id },
-                onAddClick = {
+            CardSection("📍 Ubicación") {
+                EntityDropdown("Lugar", lugares.map { "${it.nombre}, ${it.provincia}" }, lugares.indexOfFirst { it.id == selectedLugarId }, { selectedLugarId = lugares[it].id }) {
                     showDialogTipo = "Lugar"
-                    camposDialog.clear()
-                    camposDialog.addAll(
-                        listOf("Nombre" to mutableStateOf(""), "Provincia" to mutableStateOf(""))
-                    )
+                    camposDialog.setFromNames("Nombre", "Provincia")
                 }
-            )
+            }
 
-            EntityDropdown(
-                label = "Patología",
-                options = patologias.map { it.nombre },
-                selectedIndex = patologias.indexOfFirst { it.id == selectedPatologiaId },
-                onSelect = { selectedPatologiaId = patologias[it].id },
-                onAddClick = {
+            CardSection("🧬 Información Clínica") {
+                EntityDropdown("Patología", patologias.map { it.nombre }, patologias.indexOfFirst { it.id == selectedPatologiaId }, { selectedPatologiaId = patologias[it].id }) {
                     showDialogTipo = "Patología"
-                    camposDialog.clear()
-                    camposDialog.add("Nombre" to mutableStateOf(""))
+                    camposDialog.setFromNames("Nombre")
                 }
-            )
-
-            OutlinedTextField(value = anestesia, onValueChange = { anestesia = it }, label = { Text("Detalle Anestesia") })
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Complicación")
-                Switch(checked = complicacion, onCheckedChange = { complicacion = it }, colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.Red,
-                    checkedTrackColor = Color.Red,
-                    uncheckedThumbColor = MaterialTheme.colors.secondary,
-                    uncheckedTrackColor = MaterialTheme.colors.secondaryVariant,
-                ))
+                OutlinedTextField(value = anestesia, onValueChange = { anestesia = it }, label = { Text("Detalle Anestesia") }, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Complicación")
+                    Switch(checked = complicacion, onCheckedChange = { complicacion = it })
+                }
+                if (complicacion) {
+                    OutlinedTextField(value = detalleComplicacion, onValueChange = { detalleComplicacion = it }, label = { Text("Detalle Complicación") }, modifier = Modifier.fillMaxWidth())
+                }
+                OutlinedTextField(value = cambioMotor, onValueChange = { cambioMotor = it }, label = { Text("Cambio Motor") }, modifier = Modifier.fillMaxWidth())
             }
-            if (complicacion) {
-                OutlinedTextField(value = detalleComplicacion, onValueChange = { detalleComplicacion = it }, label = { Text("Detalle Complicación") })
-            }
-
-            OutlinedTextField(value = cambioMotor, onValueChange = { cambioMotor = it }, label = { Text("Cambio Motor") })
         }
 
         if (showDialogTipo.isNotEmpty()) {
             SimpleInputDialog(
-                title = if (showDialogTipo == "Paciente" && paciente != null) "Editar Paciente" else "Nuevo $showDialogTipo",
-                fields = camposDialog.mapIndexed { index, pair ->
-                    if (showDialogTipo == "Paciente" && index == 0 && paciente != null) {
-                        // Marcar DNI como no editable
-                        pair.copy(second = mutableStateOf(pair.second.value))
-                    } else {
-                        pair
-                    }
-                },
+                title = "Nuevo $showDialogTipo",
+                fields = camposDialog,
                 onDismiss = { showDialogTipo = "" },
                 onConfirm = {
                     when (showDialogTipo) {
                         "Paciente" -> {
                             val nuevoDni = camposDialog[0].second.value.toIntOrNull() ?: 0
-                            val nuevoPaciente = Paciente(
-                                dniPaciente = nuevoDni,
-                                nombre = camposDialog[1].second.value,
-                                apellido = camposDialog[2].second.value,
-                                edad = camposDialog[3].second.value.toIntOrNull() ?: 0,
-                                mutual = camposDialog[4].second.value
+                            pacienteVM.addPaciente(
+                                Paciente(
+                                    dniPaciente = nuevoDni,
+                                    nombre = camposDialog[1].second.value,
+                                    apellido = camposDialog[2].second.value,
+                                    edad = camposDialog[3].second.value.toIntOrNull() ?: 0,
+                                    mutual = camposDialog[4].second.value
+                                )
                             )
-                            pacienteVM.addPaciente(nuevoPaciente)
                             dniPaciente = nuevoDni.toString()
                         }
                         "Médico" -> medicoVM.addMedico(camposDialog[0].second.value, camposDialog[1].second.value)
@@ -289,7 +252,17 @@ fun FormScreen(
                     showDialogTipo = ""
                 }
             )
+        }
+    }
+}
 
+@Composable
+fun CardSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(elevation = 6.dp, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            SectionHeader(title)
+            Spacer(Modifier.height(8.dp))
+            content()
         }
     }
 }
